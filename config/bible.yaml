@@ -1,0 +1,23 @@
+premise: "A night janitor discovers the building forgets people who work late."
+pov: first-person deep POV
+tense: past
+voice: minimal, concrete imagery, no purple prose, deep POV
+theme: memory vs. erasure
+constraints:
+  - "≤180 words"
+  - "no clichés"
+  - "clear stakes"
+  - "deep POV: no filter words (I saw, I heard, I felt, I thought)"
+  - "direct sensory experience only"
+  - "zero narrative distance"
+beat_budget:
+  setup: 40
+  turn: 70
+  aftershock: 60
+  button: 10
+must_include:
+  - "a buzzing exit sign"
+  - "a coffee stain shaped like a country"
+  - "a name-tag with the wrong name"
+off_limits:
+  - "amnesia as a diagnosis"

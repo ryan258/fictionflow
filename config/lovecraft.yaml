@@ -1,0 +1,26 @@
+premise: "A librarian cataloging donated occult texts discovers one book that shouldn't exist."
+pov: first-person deep POV
+tense: past
+voice: precise, academic detachment cracking into dread, concrete sensory details, deep POV
+theme: forbidden knowledge vs. sanity
+constraints:
+  - "≤180 words"
+  - "no clichés"
+  - "clear stakes"
+  - "deep POV: no filter words (I saw, I heard, I felt, I thought)"
+  - "direct sensory experience only"
+  - "zero narrative distance"
+  - "cosmic horror: suggest the unknowable without explaining it"
+beat_budget:
+  setup: 40
+  turn: 70
+  aftershock: 60
+  button: 10
+must_include:
+  - "a book bound in something that wasn't leather"
+  - "text that shifts when looked at directly"
+  - "geometry that hurts to perceive"
+off_limits:
+  - "named Lovecraft entities (no Cthulhu, Nyarlathotep, etc.)"
+  - "purple prose or archaic language"
+  - "explaining the cosmic horror"
