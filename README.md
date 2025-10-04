@@ -1,6 +1,6 @@
 # Fictionflow (Node.js CLI)
 
-A single‑source starter to build a **bias‑aware micro‑fiction pipeline** with **deep POV enforcement** using OpenAI (writer/aggregator), Claude (focus group A), and Gemini (focus group B). It ships a deterministic loop with a **2‑cycle max** so you publish instead of spiral.
+A single-source starter to build a **bias-aware micro-fiction pipeline** with **deep POV enforcement** using OpenAI (writer/aggregator), Claude (focus group A), and OpenRouter (focus group B, default DeepSeek). It ships a deterministic loop with a **2-cycle max** so you publish instead of spiral.
 
 > Flow: **logline → Story Bible → draft → two judges → aggregate plan → revise → retell test → publish gate**.
 
@@ -14,7 +14,7 @@ mkdir fictionflow && cd fictionflow && git init
 
 # 2) Deps
 npm init -y
-npm i openai @anthropic-ai/sdk @google/generative-ai zod yargs chalk ora dotenv fs-extra yaml uuid
+npm i openai @anthropic-ai/sdk zod yargs chalk ora dotenv fs-extra yaml uuid
 npm i -D typescript ts-node @types/node @types/yargs prettier
 
 # 3) Scaffolding
@@ -24,12 +24,12 @@ mkdir -p src/prompts src/lib out config
 cat > .env <<'ENV'
 OPENAI_API_KEY=sk-...
 ANTHROPIC_API_KEY=...
-GEMINI_API_KEY=...
+OPENROUTER_API_KEY=...
 # Defaults (override via flags if you like)
-OPENAI_MODEL_WRITER=gpt-4o
-OPENAI_MODEL_AGGREGATOR=gpt-5
-CLAUDE_MODEL=claude-sonnet-4-5
-GEMINI_MODEL=gemini-2.5-flash
+WRITER_MODEL=openai/gpt-4o-mini
+AGGREGATOR_MODEL=openai/gpt-5
+JUDGE_A_MODEL=anthropic/claude-sonnet-4-5
+JUDGE_B_MODEL=openrouter/deepseek/deepseek-chat
 ENV
 
 # 5) Config → Story Bible template
@@ -89,8 +89,8 @@ npx ts-node src/cli.ts run --bible config/bible.yaml --out out/
 
 ## 1) What this project does
 
-- **Drafts** a micro‑fiction piece in **deep POV** from a Story Bible using **OpenAI writer** (default `gpt-4o`).
-- Runs two **independent focus groups** (Claude + Gemini) that return **quote‑bound JSON** critiques—no rewrites. Both judges **flag filter words** (I saw/heard/felt/thought) as POV violations.
+- **Drafts** a micro-fiction piece in **deep POV** from a Story Bible using **OpenAI writer** (default `openai/gpt-4o-mini`).
+- Runs two **independent focus groups** (Claude + OpenRouter/DeepSeek) that return **quote-bound JSON** critiques—no rewrites. Both judges **flag filter words** (I saw/heard/felt/thought) as POV violations.
 - **Aggregates** only **overlapping issues** into a short plan with a **publish gate** (OpenAI aggregator, default `gpt-5`).
 - Applies a **must‑fix‑only revision**, then a **retell test** (both judges summarize in 2 sentences).
 - Decides **Publish: YES/NO** using thresholds + retell agreement. **Max two cycles.**
@@ -139,16 +139,16 @@ npx ts-node src/cli.ts run --bible config/bible.yaml --out out/ [--seed out/seed
 Create a first draft from the Story Bible.
 
 ```bash
-npx ts-node src/cli.ts draft --bible config/bible.yaml --out out/draft.md [--writer $OPENAI_MODEL_WRITER]
+npx ts-node src/cli.ts draft --bible config/bible.yaml --out out/draft.md [--writer $WRITER_MODEL]
 ```
 
 ### `critique`
 
-Run **Focus Group A** (Claude) and **B** (Gemini). Deterministic (temperature 0). Saves: `out/critique_claude.json`, `out/critique_gemini.json`.
+Run **Focus Group A** (Claude) and **B** (OpenRouter/DeepSeek). Deterministic (temperature 0). Saves: `out/critique_claude.json`, `out/critique_deepseek.json`.
 
 ```bash
 npx ts-node src/cli.ts critique --story out/draft.md --out out/ \
-  [--claude $CLAUDE_MODEL] [--gemini $GEMINI_MODEL]
+  [--judgeA $JUDGE_A_MODEL] [--judgeB $JUDGE_B_MODEL]
 ```
 
 ### `aggregate`
@@ -157,8 +157,8 @@ Merge **overlapping** issues into a concise plan + publish gate (OpenAI). Saves 
 
 ```bash
 npx ts-node src/cli.ts aggregate --story out/draft.md \
-  --a out/critique_claude.json --b out/critique_gemini.json \
-  --out out/plan.json [--model $OPENAI_MODEL_AGGREGATOR]
+  --a out/critique_claude.json --b out/critique_deepseek.json \
+  --out out/plan.json [--model $AGGREGATOR_MODEL]
 ```
 
 ### `revise`
@@ -167,12 +167,12 @@ Apply **must\_fix only** from the plan. Keep ≤180 words and beat tags. Saves `
 
 ```bash
 npx ts-node src/cli.ts revise --bible config/bible.yaml --story out/draft.md \
-  --plan out/plan.json --out out/revised.md [--writer $OPENAI_MODEL_WRITER]
+  --plan out/plan.json --out out/revised.md [--writer $WRITER_MODEL]
 ```
 
 ### `retell`
 
-Ask both judges for a 2‑sentence retell; saves `out/retell_claude.json`, `out/retell_gemini.json`.
+Ask both judges for a 2-sentence retell; saves `out/retell_claude.json`, `out/retell_deepseek.json`.
 
 ```bash
 npx ts-node src/cli.ts retell --story out/revised.md --out out/
@@ -184,8 +184,8 @@ Decide publish/no based on averages, confusion count, and retell match.
 
 ```bash
 npx ts-node src/cli.ts gate \
-  --a out/critique_claude.json --b out/critique_gemini.json \
-  --ra out/retell_claude.json --rb out/retell_gemini.json
+  --a out/critique_claude.json --b out/critique_deepseek.json \
+  --ra out/retell_claude.json --rb out/retell_deepseek.json
 ```
 
 ---
@@ -205,7 +205,7 @@ Story Bible:
 Draft only with beat tags; no explanations.
 ```
 
-### Focus Group (Claude/Gemini) — **no rewrites**
+### Focus Group (Claude/OpenRouter) — **no rewrites**
 
 ```
 Role: Critical but fair focus group. Do NOT rewrite the story.
@@ -301,7 +301,8 @@ fictionflow/
   │   ├─ cli.ts               # provided scaffold
   │   ├─ schemas.ts           # Zod schemas
   │   ├─ lib/
-  │   │   └─ clients.ts       # SDK wrappers (OpenAI/Claude/Gemini)
+  │   │   ├─ model-router.ts  # Provider-prefixed router (OpenAI/Anthropic/OpenRouter)
+  │   │   └─ clients.ts       # Optional direct SDK helpers
   │   └─ prompts/
   │       ├─ writer.txt
   │       ├─ focus_group.txt
@@ -320,10 +321,9 @@ fictionflow/
 ## 7) Implementation plan (for Codex/Claude Code)
 
 1. **Wire CLI** with `yargs` commands above; keep options short & typed.
-2. **SDK clients** in `src/lib/clients.ts`:
-   - `openaiText(model, prompt, temperature)` using **Responses API**.
-   - `claudeJson(story, system)` using **Anthropic Messages**.
-   - `geminiJson(story, system)` using **Generative AI SDK**. All judges use `temperature: 0`.
+2. **Model routing** in `src/lib/model-router.ts`:
+   - Accept `provider/model` strings (`openai/`, `anthropic/`, `openrouter/`).
+   - Invoke the right SDK (OpenRouter piggybacks on the OpenAI client). Keep judges at `temperature: 0` when requesting JSON.
 3. **Prompts** as text files; load & template with Bible/Story.
 4. **Validation**: parse JSON with Zod; on failure, save raw text and **retry once** with a “return valid JSON” reminder.
 5. **Publish gate**: avg of both judge ratings ≥ 2.5, `confusions_total ≤ 2`, and **retell match** (exact string compare after trim).
@@ -351,7 +351,7 @@ fictionflow/
 
 - **Invalid JSON** from a judge → write `*_raw.txt`, retry once with a JSON‑strict reminder.
 - **Retells don’t match** → Aggregator should target the confused span in `revision_plan`.
-- **Slow/costly** → change models via env; try smaller OpenAI/Gemini variants for drafting.
+- **Slow/costly** → change models via env; try smaller OpenAI or OpenRouter variants for drafting.
 - **403/keys** → confirm `.env` is loaded (Node `dotenv`) and model names are available in your account/region.
 
 ---
@@ -366,7 +366,7 @@ MIT (or your choice). Add a `LICENSE` file if publishing.
 
 Use this as the **single task** to generate remaining files:
 
-> **“Create a Node.js CLI in **``** named **``** that implements commands **``**, **``**, **``**, **``**, **``**, **``**, and **``** exactly as specified in README. Add **``** wrapping OpenAI/Anthropic/Gemini SDKs, Zod schemas in **``**, and prompt text files in **``**. Validate judge outputs against **``**; aggregator against **``**; retry once on invalid JSON. Save artifacts to **``**. Provide **``** and NPM scripts (**``**, **``**, **``**). Deterministic judges (temperature=0). Include a **``** flag using macOS **``** when available.”**
+> **“Create a Node.js CLI in **``** named **``** that implements commands **``**, **``**, **``**, **``**, **``**, **``**, and **``** exactly as specified in README. Add **``** wrapping OpenAI/Anthropic/OpenRouter SDKs, Zod schemas in **``**, and prompt text files in **``**. Validate judge outputs against **``**; aggregator against **``**; retry once on invalid JSON. Save artifacts to **``**. Provide **``** and NPM scripts (**``**, **``**, **``**). Deterministic judges (temperature=0). Include a **``** flag using macOS **``** when available.”**
 
 ---
 
