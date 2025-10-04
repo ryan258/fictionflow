@@ -92,7 +92,8 @@ npx ts-node src/cli.ts run --bible config/bible.yaml --out out/
 - **Drafts** a micro-fiction piece in **deep POV** from a Story Bible using **OpenAI writer** (default `openai/gpt-4o-mini`).
 - Runs two **independent focus groups** (Claude + OpenRouter/DeepSeek) that return **quote-bound JSON** critiques—no rewrites. Both judges **flag filter words** (I saw/heard/felt/thought) as POV violations.
 - **Aggregates** only **overlapping issues** into a short plan with a **publish gate** (OpenAI aggregator, default `gpt-5`).
-- Applies a **must‑fix‑only revision**, then a **retell test** (both judges summarize in 2 sentences).
+- Applies a **must-fix-only revision**, then a **retell test** (both judges summarize in 2 sentences).
+- Generates a final **title** and packages the story artifacts per run.
 - Decides **Publish: YES/NO** using thresholds + retell agreement. **Max two cycles.**
 
 **Why:** avoids judge‑gaming, reduces indecision, keeps the story tight (≤180w, beat budget), and enforces zero narrative distance through deep POV.
@@ -128,7 +129,8 @@ Use `yargs`. All commands accept `--verbose`, `--speak` (optional macOS TTS), an
 
 ### `run`
 
-End‑to‑end: `draft → critique(A,B) → aggregate → revise → retell → gate`.
+End-to-end: `draft → critique(A,B) → aggregate → revise → retell → gate`.
+Artifacts land in a numbered run directory (e.g. `out/001_title-slug/`) with incrementally prefixed files (`01-draft.md`, `02-critique_claude.json`, … `10-metadata.json`) so everything stays in order alongside the titled `published.md`.
 
 ```bash
 npx ts-node src/cli.ts run --bible config/bible.yaml --out out/ [--seed out/seed.md]
@@ -236,10 +238,16 @@ You are an impartial aggregator. Think silently; output JSON only with keys:
 Do not copy judge wording; use plain language.
 ```
 
-### Retell‑only (both judges)
+### Retell-only (both judges)
 
 ```
 Return only: {"retell": "2 sentences"}.
+```
+
+### Title (model-agnostic)
+
+```
+You are titling a micro-fiction story. Read the story and return a concise, evocative title no longer than six words. Avoid quotation marks or trailing punctuation.
 ```
 
 ---
@@ -307,7 +315,8 @@ fictionflow/
   │       ├─ writer.txt
   │       ├─ focus_group.txt
   │       ├─ aggregator.txt
-  │       └─ retell.txt
+  │       ├─ retell.txt
+  │       └─ title.txt
   ├─ config/
   │   └─ bible.yaml
   ├─ out/                     # artifacts
@@ -328,11 +337,12 @@ fictionflow/
 4. **Validation**: parse JSON with Zod; on failure, save raw text and **retry once** with a “return valid JSON” reminder.
 5. **Publish gate**: avg of both judge ratings ≥ 2.5, `confusions_total ≤ 2`, and **retell match** (exact string compare after trim).
 6. **Loop limit**: `run` performs at most **two** `revise → retell → gate` cycles.
-7. **Exit codes**: non‑zero on API error or invalid JSON after retry; print clear blockers.
+7. **Per-run packaging**: store artifacts in `out/<index>_<slug>/`, include `metadata.json`, `title.txt`, and prepend the title to `published.md`.
+8. **Exit codes**: non-zero on API error or invalid JSON after retry; print clear blockers.
 
 **Acceptance criteria**
 
-- `run` outputs: `draft.md`, `critique_*.json`, `plan.json`, `revised.md`, `retell_*.json` and a final **Publish: YES/NO**.
+- `run` outputs live in a numbered directory with prefixed filenames (`01-draft.md`, `02-critique_claude.json`, …, `10-metadata.json`) plus a titled `published.md` when the gate passes.
 - Judges never rewrite; critiques must quote spans.
 - Aggregator includes only **overlapping issues** (or logically equivalent) with quotes from both.
 
@@ -377,4 +387,3 @@ Paste your **logline** and we’ll convert it into a Story Bible YAML you can dr
 ```bash
 npx ts-node src/cli.ts run --bible config/bible.yaml --out out/
 ```
-

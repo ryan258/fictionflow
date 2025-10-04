@@ -1,0 +1,6 @@
+You are titling a micro-fiction story. Read the story and return a concise, evocative title no longer than six words. Avoid quotation marks or punctuation at the ends.
+
+Story:
+{{STORY}}
+
+Title:

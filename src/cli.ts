@@ -56,6 +56,86 @@ async function parseJson<T>(
   }
 }
 
+function slugify(text: string): string {
+  const ascii = text
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x00-\x7F]/g, "");
+  return ascii
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+const RUN_FILE_NAMES = {
+  draft: "01-draft.md",
+  critiqueClaude: "02-critique_claude.json",
+  critiqueDeepseek: "03-critique_deepseek.json",
+  plan: "04-plan.json",
+  revised: (cycle: number) => `05-${String(cycle).padStart(2, "0")}-revised.md`,
+  retellClaude: "06-retell_claude.json",
+  retellDeepseek: "07-retell_deepseek.json",
+  published: "08-published.md",
+  title: "09-title.txt",
+  metadata: "10-metadata.json"
+} as const;
+
+async function determineNextRunDir(baseOut: string): Promise<{ index: string; dir: string }> {
+  await fs.ensureDir(baseOut);
+  const entries = await fs.readdir(baseOut).catch(() => [] as string[]);
+  let maxIndex = 0;
+
+  for (const entry of entries) {
+    const match = entry.match(/^(\d{3})/);
+    if (!match) continue;
+    const entryPath = path.join(baseOut, entry);
+    try {
+      const stats = await fs.stat(entryPath);
+      if (!stats.isDirectory()) continue;
+      maxIndex = Math.max(maxIndex, parseInt(match[1], 10));
+    } catch {
+      // ignore entries we can't stat
+    }
+  }
+
+  let next = maxIndex + 1;
+  while (true) {
+    const index = String(next).padStart(3, "0");
+    const candidate = path.join(baseOut, index);
+    if (!(await fs.pathExists(candidate))) {
+      await fs.ensureDir(candidate);
+      return { index, dir: candidate };
+    }
+    next++;
+  }
+}
+
+async function generateTitle(story: string, argv: any): Promise<string> {
+  const titlePrompt = await loadPrompt("title");
+  const prompt = titlePrompt.replace("{{STORY}}", story.trim());
+  const model =
+    argv.titleModel ||
+    process.env.TITLE_MODEL ||
+    argv.aggregator ||
+    process.env.AGGREGATOR_MODEL ||
+    "openai/gpt-5";
+
+  if (argv.verbose) {
+    console.log(chalk.blue("Title model:"), model);
+  }
+
+  const raw = await callModel({
+    model,
+    userPrompt: prompt,
+    temperature: 0.4,
+    responseFormat: "text"
+  });
+
+  const cleaned = raw.trim().split(/\r?\n/)[0]?.trim() || "";
+  return cleaned.replace(/^['"#\s]+/, "").replace(/['"\s]+$/, "") || "Untitled";
+}
+
 // Command handlers
 async function handleDraft(argv: any) {
   const spinner = ora("Loading Story Bible").start();
@@ -103,6 +183,10 @@ async function handleCritique(argv: any) {
 
   const focusGroupPrompt = await loadPrompt("focus_group");
 
+  const fileNames = argv.fileNames || {};
+  const claudeFile = fileNames.claude || "critique_claude.json";
+  const judgeBFile = fileNames.judgeB || "critique_deepseek.json";
+
   // Claude critique
   speak("Running Claude focus group", argv.speak);
   spinner.start("Claude critique");
@@ -124,7 +208,7 @@ async function handleCritique(argv: any) {
     temperature: 0,
     responseFormat: "json"
   });
-  const claudePath = path.join(argv.out, "critique_claude.json");
+  const claudePath = path.join(argv.out, claudeFile);
 
   try {
     const claudeCritique = await parseJson(claudeRaw, Critique, claudePath, false);
@@ -149,7 +233,7 @@ async function handleCritique(argv: any) {
   spinner.start("Judge B critique");
 
   const judgeBModel = argv.judgeB || process.env.JUDGE_B_MODEL || "openrouter/deepseek/deepseek-chat";
-  const deepseekPath = path.join(argv.out, "critique_deepseek.json");
+  const deepseekPath = path.join(argv.out, judgeBFile);
 
   if (argv.verbose) {
     console.log(chalk.blue("Judge B model:"), judgeBModel);
@@ -307,6 +391,10 @@ async function handleRetell(argv: any) {
 
   const retellPrompt = await loadPrompt("retell");
 
+  const fileNames = argv.fileNames || {};
+  const claudeFile = fileNames.claude || "retell_claude.json";
+  const judgeBFile = fileNames.judgeB || "retell_deepseek.json";
+
   speak("Running retell test", argv.speak);
 
   if (argv.dry) {
@@ -324,7 +412,7 @@ async function handleRetell(argv: any) {
     temperature: 0,
     responseFormat: "json"
   });
-  const claudePath = path.join(argv.out, "retell_claude.json");
+  const claudePath = path.join(argv.out, claudeFile);
 
   try {
     const claudeRetell = await parseJson(claudeRaw, Retell, claudePath, false);
@@ -347,7 +435,7 @@ async function handleRetell(argv: any) {
   // Judge B retell
   spinner.start("Judge B retell");
   const judgeBModel = process.env.JUDGE_B_MODEL || "openrouter/deepseek/deepseek-chat";
-  const deepseekPath = path.join(argv.out, "retell_deepseek.json");
+  const deepseekPath = path.join(argv.out, judgeBFile);
   let deepseekRaw = await callModel({
     model: judgeBModel,
     systemPrompt: retellPrompt,
@@ -445,11 +533,12 @@ async function handleGate(argv: any) {
 async function handleRun(argv: any) {
   speak("Starting end-to-end run", argv.speak);
 
-  await fs.ensureDir(argv.out);
+  const baseOut = path.resolve(argv.out);
+  const { index: runIndex, dir: initialRunDir } = await determineNextRunDir(baseOut);
+  let runDir = initialRunDir;
 
-  const draftPath = path.join(argv.out, "draft.md");
-  const revisedPath = path.join(argv.out, "revised.md");
-  const planPath = path.join(argv.out, "plan.json");
+  const draftPath = path.join(runDir, RUN_FILE_NAMES.draft);
+  const planPath = path.join(runDir, RUN_FILE_NAMES.plan);
 
   // Draft
   await handleDraft({
@@ -460,6 +549,10 @@ async function handleRun(argv: any) {
   let currentStory = draftPath;
   let cycle = 0;
   const maxCycles = 2;
+  let publishSuccess = false;
+  let failureReason: string | null = null;
+  let finalPublishedPath = "";
+  let finalTitle = "";
 
   while (cycle < maxCycles) {
     cycle++;
@@ -468,20 +561,25 @@ async function handleRun(argv: any) {
     // Critique
     await handleCritique({
       ...argv,
-      story: currentStory
+      out: runDir,
+      story: currentStory,
+      fileNames: {
+        claude: RUN_FILE_NAMES.critiqueClaude,
+        judgeB: RUN_FILE_NAMES.critiqueDeepseek
+      }
     });
 
     // Aggregate
     await handleAggregate({
       ...argv,
       story: currentStory,
-      a: path.join(argv.out, "critique_claude.json"),
-      b: path.join(argv.out, "critique_deepseek.json"),
+      a: path.join(runDir, RUN_FILE_NAMES.critiqueClaude),
+      b: path.join(runDir, RUN_FILE_NAMES.critiqueDeepseek),
       out: planPath
     });
 
     // Revise
-    const cycleRevisedPath = cycle === 1 ? revisedPath : path.join(argv.out, `revised_${cycle}.md`);
+    const cycleRevisedPath = path.join(runDir, RUN_FILE_NAMES.revised(cycle));
     await handleRevise({
       ...argv,
       story: currentStory,
@@ -492,7 +590,12 @@ async function handleRun(argv: any) {
     // Retell
     await handleRetell({
       ...argv,
-      story: cycleRevisedPath
+      out: runDir,
+      story: cycleRevisedPath,
+      fileNames: {
+        claude: RUN_FILE_NAMES.retellClaude,
+        judgeB: RUN_FILE_NAMES.retellDeepseek
+      }
     });
 
     // Gate
@@ -500,13 +603,12 @@ async function handleRun(argv: any) {
       await handleGate({
         ...argv,
         fromRun: true,
-        a: path.join(argv.out, "critique_claude.json"),
-        b: path.join(argv.out, "critique_deepseek.json"),
-        ra: path.join(argv.out, "retell_claude.json"),
-        rb: path.join(argv.out, "retell_deepseek.json")
+        a: path.join(runDir, RUN_FILE_NAMES.critiqueClaude),
+        b: path.join(runDir, RUN_FILE_NAMES.critiqueDeepseek),
+        ra: path.join(runDir, RUN_FILE_NAMES.retellClaude),
+        rb: path.join(runDir, RUN_FILE_NAMES.retellDeepseek)
       });
 
-      // Gate passed - create clean published version without beat tags
       const storyContent = await fs.readFile(cycleRevisedPath, "utf-8");
       const cleanedStory = storyContent
         .replace(/\[SETUP\]\s*/g, "")
@@ -515,21 +617,100 @@ async function handleRun(argv: any) {
         .replace(/\[BUTTON\]\s*/g, "")
         .trim();
 
-      const publishedPath = path.join(argv.out, "published.md");
-      await fs.writeFile(publishedPath, cleanedStory);
-      console.log(chalk.green.bold(`\n📘 Published story saved to ${publishedPath}`));
+      finalTitle = await generateTitle(storyContent, argv);
+      const titleSlug = slugify(finalTitle) || "untitled";
+      const publishedContent = `# ${finalTitle}\n\n${cleanedStory}`;
 
+      finalPublishedPath = path.join(runDir, RUN_FILE_NAMES.published);
+      await fs.writeFile(finalPublishedPath, publishedContent);
+      await fs.writeFile(path.join(runDir, RUN_FILE_NAMES.title), `${finalTitle}\n`);
+      await fs.writeFile(
+        path.join(runDir, RUN_FILE_NAMES.metadata),
+        JSON.stringify(
+          {
+            run_index: runIndex,
+            title: finalTitle,
+            published: true,
+            timestamp: new Date().toISOString()
+          },
+          null,
+          2
+        )
+      );
+
+      // Rename run directory with title slug if available
+      const desiredBaseName = `${runIndex}_${titleSlug}`;
+      let targetDir = path.join(baseOut, desiredBaseName);
+      let suffix = 1;
+      while (
+        (await fs.pathExists(targetDir)) &&
+        path.resolve(targetDir) !== path.resolve(runDir)
+      ) {
+        suffix++;
+        targetDir = path.join(baseOut, `${desiredBaseName}-${suffix}`);
+      }
+
+      if (path.resolve(targetDir) !== path.resolve(runDir)) {
+        await fs.rename(runDir, targetDir);
+        runDir = targetDir;
+        finalPublishedPath = path.join(runDir, "published.md");
+      }
+
+      console.log(chalk.green.bold(`\n📘 Published story saved to ${finalPublishedPath}`));
+      publishSuccess = true;
       break;
-    } catch (err) {
+    } catch (err: any) {
       if (cycle < maxCycles) {
         console.log(chalk.yellow(`\n⚠ Gate failed. Running cycle ${cycle + 1}...`));
         currentStory = cycleRevisedPath;
       } else {
+        failureReason = err?.message || "Gate failed";
         console.log(chalk.red("\n✗ Max cycles reached. Publish: NO"));
         speak("Max cycles reached", argv.speak);
-        process.exit(1);
+        break;
       }
     }
+  }
+
+  if (!publishSuccess) {
+    const failedBase = `${runIndex}_failed`;
+    let failedDir = path.join(baseOut, failedBase);
+    let suffix = 1;
+    while (
+      (await fs.pathExists(failedDir)) &&
+      path.resolve(failedDir) !== path.resolve(runDir)
+    ) {
+      suffix++;
+      failedDir = path.join(baseOut, `${failedBase}-${suffix}`);
+    }
+
+    if (path.resolve(failedDir) !== path.resolve(runDir)) {
+      await fs.rename(runDir, failedDir);
+      runDir = failedDir;
+    }
+
+    await fs.writeFile(
+      path.join(runDir, RUN_FILE_NAMES.metadata),
+      JSON.stringify(
+        {
+          run_index: runIndex,
+          title: null,
+          published: false,
+          reason: failureReason,
+          timestamp: new Date().toISOString()
+        },
+        null,
+        2
+      )
+    );
+
+    console.log(chalk.red(`Artifacts saved to ${runDir}`));
+    process.exit(1);
+  }
+
+  if (publishSuccess && finalTitle) {
+    console.log(chalk.blue(`Title: ${finalTitle}`));
+    console.log(chalk.blue(`Run directory: ${runDir}`));
   }
 }
 
